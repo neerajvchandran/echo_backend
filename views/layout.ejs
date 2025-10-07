@@ -1,0 +1,24 @@
+<head>
+  <link rel="stylesheet" href="/style.css" />
+  <title>echo</title>
+</head>
+
+<body>
+  <nav class="navbar">
+    <% if(currentUser){ %>
+    <a class="nav-btn" href="/feed">Feed</a>
+    <a class="nav-btn" href="/people">People</a>
+    <a class="nav-btn" href="/feed/create">Create</a>
+    <a class="nav-btn" href="/people/<%= currentUser._id %>">You</a>
+    <a class="nav-btn" href="/logout">Logout</a>
+    <a class="nav-btn" href="/delete-account">Delete account</a>
+    <% } else { %>
+    <a class="nav-btn" href="/people">People</a>
+    <a class="nav-btn" href="/login">Login</a>
+    <a class="nav-btn" href="/signup">Sign-up</a>
+    <a class="nav-btn" href="/forgot">Forgot Password</a>
+    <% } %>
+  </nav>
+
+  <%- body %>
+</body>

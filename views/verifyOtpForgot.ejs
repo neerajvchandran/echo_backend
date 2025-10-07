@@ -1,0 +1,19 @@
+<head>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<h1 class="page-title">Verify OTP</h1>
+
+<form class="form-container" method="POST" action="/forgot/verify-otp">
+  <input type="hidden" name="email" value="<%= email %>" />
+
+  <input
+    name="otp"
+    type="text"
+    class="form-input"
+    placeholder="Enter OTP sent to your email"
+    required
+  />
+
+  <button type="submit" class="form-btn">Verify OTP</button>
+</form>

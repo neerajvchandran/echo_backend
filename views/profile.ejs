@@ -1,0 +1,20 @@
+<head>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<div class="profile-container">
+  <h1 class="profile-title"><%= user.username %>'s Profile</h1>
+
+  <h3 class="posts-heading">Posts:</h3>
+  <ul class="post-list">
+    <% posts.forEach(post => { %>
+    <li class="post-item">
+      <%= post.content %> <% if (currentUser && post.authorId.toString() ===
+      currentUser.toString()) { %>
+      <a class="edit-post-link" href="/edit/<%= post._id %>">Edit post</a>
+
+      <% } %>
+    </li>
+    <% }) %>
+  </ul>
+</div>

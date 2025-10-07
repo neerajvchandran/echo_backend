@@ -1,0 +1,27 @@
+<head>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<div class="otp-container">
+  <h1 class="otp-title">Verify OTP</h1>
+  <p class="otp-info">We have sent an OTP to <strong><%= email %></strong></p>
+
+  <form class="otp-form" action="/verify-otp" method="POST">
+    <input type="hidden" name="email" value="<%= email %>" />
+
+    <label for="otp" class="otp-label">Enter OTP:</label>
+    <input
+      type="text"
+      id="otp"
+      name="otp"
+      placeholder="6-digit OTP"
+      required
+      maxlength="6"
+      class="otp-input"
+    />
+
+    <button type="submit" class="otp-btn">Verify</button>
+  </form>
+
+  <p class="otp-note">OTP is valid for 5 minutes.</p>
+</div>
