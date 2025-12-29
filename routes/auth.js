@@ -1,135 +1,101 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const bcrypt = require("bcryptjs");
-const User = require("../models/User");
-const sendOtp = require("../utils/sendOtp");
-const Post = require("../models/Post");
+const bcrypt = require('bcryptjs');
 
-// -------- SIGNUP --------
-router.get("/signup", (req, res) => res.render("signup"));
+const User = require('../models/User');
+const sendOtp = require('../utils/sendOtp');
 
-router.post("/signup", async (req, res) => {
+/* Helpers (session or Bearer token) */
+function extractToken(req) {
+  const auth = (req.headers.authorization || '').trim();
+  if (auth.startsWith('Bearer ')) return auth.replace('Bearer ', '').trim();
+  if (req.session && req.session.userId) return req.session.userId.toString();
+  return null;
+}
+
+async function requireAuth(req, res, next) {
+  const token = extractToken(req);
+  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+  const user = await User.findById(token);
+  if (!user) return res.status(401).json({ error: 'Invalid token / user not found' });
+  req.currentUser = user;
+  next();
+}
+
+/* SIGNUP */
+router.post('/signup', async (req, res) => {
   const { email, username, password } = req.body;
+  if (!email || !username || !password) {
+    return res.status(400).json({ error: 'email, username and password are required' });
+  }
 
   try {
     const passwordHash = await bcrypt.hash(password, 10);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
 
-    const user = await User.create({
-      email,
-      username,
-      passwordHash,
-      otp,
-      otpExpiry,
-      otpVerified: false,
-    });
+    const user = await User.create({ email, username, passwordHash, otp, otpExpiry, otpVerified: false });
 
-    await sendOtp(email, otp, "Signup OTP");
-    return res.render("verifyOtp", { email, purpose: "signup" });
+    // best-effort OTP send
+    try { await sendOtp(user.email, otp, 'Signup OTP'); } catch (e) { console.error('OTP send failed:', e); }
+
+    return res.json({ ok: true, message: 'OTP sent', email: user.email });
   } catch (err) {
-    // Check if it’s a Mongo duplicate key error
+    console.error('Signup error:', err);
     if (err.code === 11000) {
-      let field = Object.keys(err.keyValue)[0]; // email or username
-      return res.render("message", {
-        title: "Oops",
-        message: `${
-          field.charAt(0).toUpperCase() + field.slice(1)
-        } already registered`,
-        redirect: "/signup",
-        redirectText: "Back to Signup",
-      });
+      const field = Object.keys(err.keyValue || {})[0] || 'value';
+      return res.status(400).json({ error: `${field} already registered` });
     }
-
-    // Other errors
-    return res.render("message", {
-      title: "Error",
-      message: "Something went wrong. Please try again.",
-      redirect: "/signup",
-      redirectText: "Back to Signup",
-    });
+    return res.status(500).json({ error: 'Something went wrong while creating user' });
   }
 });
 
-// -------- LOGIN --------
-router.get("/login", (req, res) => res.render("login"));
-
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
-  const user = await User.findOne({ email });
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return res.render("message", {
-      title: "Oops",
-      message: "No user found or incorrect password",
-      redirect: "/login",
-      redirectText: "Back to Login",
-    });
-  }
-
-  // Direct login without OTP for now
-  req.session.userId = user._id;
-  return res.redirect("/feed");
-});
-
-// -------- VERIFY OTP (for Signup only) --------
-router.post("/verify-otp", async (req, res) => {
+/* VERIFY SIGNUP OTP */
+router.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
+  if (!email || !otp) return res.status(400).json({ error: 'email and otp required' });
+
   const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ error: 'Invalid email address' });
 
-  if (!user) {
-    return res.render("message", {
-      title: "Oops",
-      message: "Invalid email address",
-      redirect: "/login",
-      redirectText: "Back to Login",
-    });
-  }
-
-  if (user.otp !== otp) {
-    return res.render("message", {
-      title: "Oops",
-      message: "Incorrect OTP",
-      redirect: "/signup",
-      redirectText: "Back to Signup",
-    });
-  }
-
-  if (user.otpExpiry < new Date()) {
-    return res.render("message", {
-      title: "Oops",
-      message: "OTP expired",
-      redirect: "/signup",
-      redirectText: "Back to Signup",
-    });
-  }
+  if (user.otp !== otp) return res.status(400).json({ error: 'Incorrect OTP' });
+  if (user.otpExpiry < new Date()) return res.status(400).json({ error: 'OTP expired' });
 
   user.otpVerified = true;
   user.otp = null;
   user.otpExpiry = null;
   await user.save();
 
-  req.session.userId = user._id;
-  return res.redirect("/feed");
+  // demo token = userId (replace with JWT in production)
+  const token = user._id.toString();
+  if (req.session) req.session.userId = user._id;
+
+  return res.json({ ok: true, token, user: { id: user._id, email: user.email, username: user.username } });
 });
 
-// -------- FORGOT PASSWORD --------
-// Step 1: Request OTP
-router.get("/forgot", (req, res) => res.render("forgot"));
+/* LOGIN */
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'email and password required' });
 
-router.post("/forgot", async (req, res) => {
-  const { emailOrUsername } = req.body;
-  const user = await User.findOne({
-    $or: [{ email: emailOrUsername }, { username: emailOrUsername }],
-  });
-
-  if (!user) {
-    return res.render("message", {
-      title: "Oops",
-      message: "No user found with that email or username",
-      redirect: "/forgot",
-      redirectText: "Back to Forgot Password",
-    });
+  const user = await User.findOne({ email });
+  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    return res.status(400).json({ error: 'No user found or incorrect password' });
   }
+
+  const token = user._id.toString();
+  if (req.session) req.session.userId = user._id;
+
+  return res.json({ ok: true, token, user: { id: user._id, username: user.username, email: user.email } });
+});
+
+/* FORGOT (send OTP) */
+router.post('/forgot', async (req, res) => {
+  const { emailOrUsername } = req.body;
+  if (!emailOrUsername) return res.status(400).json({ error: 'emailOrUsername required' });
+
+  const user = await User.findOne({ $or: [{ email: emailOrUsername }, { username: emailOrUsername }] });
+  if (!user) return res.status(404).json({ error: 'No user found with that email or username' });
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
@@ -138,203 +104,85 @@ router.post("/forgot", async (req, res) => {
   user.otpExpiry = otpExpiry;
   await user.save();
 
-  await sendOtp(user.email, otp, "Password Reset OTP");
+  try { await sendOtp(user.email, otp, 'Password Reset OTP'); } catch (e) { console.error('OTP send failed:', e); }
 
-  return res.render("verifyOtpForgot", { email: user.email });
+  return res.json({ ok: true, message: 'OTP sent', email: user.email });
 });
 
-// Step 2: Verify OTP
-router.post("/forgot/verify-otp", async (req, res) => {
+/* VERIFY FORGOT OTP */
+router.post('/forgot/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
+  if (!email || !otp) return res.status(400).json({ error: 'email and otp required' });
+
   const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ error: 'User not found' });
 
-  if (!user) {
-    return res.render("message", {
-      title: "Oops",
-      message: "User not found",
-      redirect: "/forgot",
-      redirectText: "Back to Forgot Password",
-    });
-  }
+  if (user.otp !== otp) return res.status(400).json({ error: 'Incorrect OTP' });
+  if (user.otpExpiry < new Date()) return res.status(400).json({ error: 'OTP expired' });
 
-  if (user.otp !== otp) {
-    return res.render("message", {
-      title: "Oops",
-      message: "Incorrect OTP",
-      redirect: "/forgot",
-      redirectText: "Back to Forgot Password",
-    });
-  }
-
-  if (user.otpExpiry < new Date()) {
-    return res.render("message", {
-      title: "Oops",
-      message: "OTP expired",
-      redirect: "/forgot",
-      redirectText: "Back to Forgot Password",
-    });
-  }
-
-  return res.render("resetPassword", { email });
+  return res.json({ ok: true, message: 'OTP verified' });
 });
 
-// Step 3: Reset Password
-router.post("/reset-password", async (req, res) => {
-  const { email, newPassword } = req.body;
-  const user = await User.findOne({ email });
+/* RESET PASSWORD */
+router.post('/reset-password', async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  if (!email || !otp || !newPassword) return res.status(400).json({ error: 'email, otp and newPassword required' });
 
-  if (!user) {
-    return res.render("message", {
-      title: "Oops",
-      message: "User not found",
-      redirect: "/login",
-      redirectText: "Back to Login",
-    });
-  }
+  const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  if (user.otp !== otp) return res.status(400).json({ error: 'Incorrect OTP' });
+  if (user.otpExpiry < new Date()) return res.status(400).json({ error: 'OTP expired' });
 
   user.passwordHash = await bcrypt.hash(newPassword, 10);
   user.otp = null;
   user.otpExpiry = null;
   await user.save();
 
-  return res.render("message", {
-    title: "Success",
-    message: "Password reset successful",
-    redirect: "/login",
-    redirectText: "Back to Login",
-  });
+  return res.json({ ok: true, message: 'Password reset successful' });
 });
 
-// -------- LOGOUT --------
-router.get("/logout", (req, res) => {
-  req.session.destroy();
-  return res.redirect("/login");
-});
-
-// -------- DELETE ACCOUNT --------
-// Confirm and delete account
-// GET delete account page
-router.get("/delete-account", async (req, res) => {
-  if (!req.session.userId) {
-    return res.render("message", {
-      title: "Oops",
-      message: "You must be logged in to delete your account.",
-      redirect: "/login",
-      redirectText: "Login",
+/* LOGOUT */
+router.post('/logout', (req, res) => {
+  if (req.session) {
+    req.session.destroy((err) => {
+      if (err) return res.status(500).json({ error: 'Error destroying session' });
+      return res.json({ ok: true, message: 'Logged out' });
     });
+  } else {
+    return res.json({ ok: true, message: 'Logged out (client should remove token)' });
   }
-
-  res.render("deleteAccount"); // render your EJS form page
 });
 
-router.post("/delete-account", async (req, res) => {
+/* DELETE ACCOUNT */
+router.post('/delete-account', requireAuth, async (req, res) => {
   const { password, confirmText } = req.body;
-
-  if (!req.session.userId) {
-    return res.render("message", {
-      title: "Oops",
-      message: "You must be logged in to delete your account.",
-      redirect: "/login",
-      redirectText: "Login",
-    });
+  if (!password || confirmText !== 'DELETE') {
+    return res.status(400).json({ error: 'Provide password and type "DELETE" to confirm' });
   }
 
   try {
-    const user = await User.findById(req.session.userId);
-    if (!user) {
-      return res.render("message", {
-        title: "Error",
-        message: "User not found.",
-        redirect: "/feed",
-        redirectText: "Back to Feed",
-      });
-    }
+    const user = await User.findById(req.currentUser._id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Check password
     const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return res.render("message", {
-        title: "Incorrect Password",
-        message: "Password you entered is incorrect.",
-        redirect: "/delete-account",
-        redirectText: "Try Again",
-      });
+    if (!isMatch) return res.status(400).json({ error: 'Incorrect password' });
+
+    // Optional: delete user's posts if you want:
+    // const Post = require('../models/Post');
+    // await Post.deleteMany({ authorId: user._id });
+
+    await User.findByIdAndDelete(user._id);
+
+    if (req.session) {
+      req.session.destroy((err) => { if (err) console.error('Session destroy error:', err); });
     }
 
-    // Check confirmation text
-    if (confirmText !== "DELETE") {
-      return res.render("message", {
-        title: "Confirmation Required",
-        message: 'You must type "DELETE" exactly to confirm account deletion.',
-        redirect: "/delete-account",
-        redirectText: "Try Again",
-      });
-    }
-
-    // Delete the user
-    await User.findByIdAndDelete(req.session.userId);
-
-    // Clear session
-    req.session.destroy((err) => {
-      if (err) {
-        return res.render("message", {
-          title: "Error",
-          message: "Something went wrong while logging out.",
-          redirect: "/feed",
-          redirectText: "Back to Feed",
-        });
-      }
-
-      // Redirect to /people as non-logged-in user
-      return res.redirect("/people");
-    });
+    return res.json({ ok: true, message: 'Account deleted' });
   } catch (error) {
-    return res.render("message", {
-      title: "Error",
-      message: "Something went wrong. Please try again later.",
-      redirect: "/feed",
-      redirectText: "Back to Feed",
-    });
+    console.error('Delete account error:', error);
+    return res.status(500).json({ error: 'Something went wrong' });
   }
-});
-
-// Edit post (GET)
-router.get("/edit/:id", async (req, res) => {
-  if (!req.session.userId) return res.redirect("/login");
-  const post = await Post.findById(req.params.id);
-  if (!post || post.authorId.toString() !== req.session.userId)
-    return res.redirect("/feed");
-  res.render("editPost", { post });
-});
-
-// Edit post (POST)
-router.post("/edit/:id", async (req, res) => {
-  if (!req.session.userId) return res.redirect("/login");
-
-  const { content } = req.body;
-  const post = await Post.findById(req.params.id);
-
-  if (!post || post.authorId.toString() !== req.session.userId)
-    return res.redirect("/feed");
-
-  // Only update if content changed
-  if (post.content !== content) {
-    post.content = content;
-    post.edited = true; // mark as edited
-    await post.save();
-  }
-
-  res.redirect("/feed");
-});
-
-// Delete post
-router.post("/delete/:id", async (req, res) => {
-  if (!req.session.userId) return res.redirect("/login");
-  const post = await Post.findById(req.params.id);
-  if (!post || post.authorId.toString() !== req.session.userId)
-    return res.redirect("/feed");
-  await Post.findByIdAndDelete(req.params.id);
-  res.redirect("/feed");
 });
 
 module.exports = router;
