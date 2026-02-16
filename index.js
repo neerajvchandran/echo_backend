@@ -77,16 +77,15 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/feed", require("./routes/feed"));
 app.use("/api/people", require("./routes/people"));
 
-// In production serve React build
-if (process.env.NODE_ENV === "production") {
-  const clientBuildPath = path.join(__dirname, "client", "build");
-  app.use(express.static(clientBuildPath));
-  app.get("/*", (req, res) => {
-    res.sendFile(path.join(clientBuildPath, "index.html"));
-  });
-} else {
-  app.get("/", (req, res) => res.send("API running"));
-}
+// Test route
+app.get("/", (req, res) => {
+  res.send("Echo API running");
+});
+
+// 404 handler (must be last)
+app.use((req, res) => {
+  res.status(404).json({ error: "Route not found" });
+});
 
 // Start server
 const PORT = process.env.PORT || 3000;
