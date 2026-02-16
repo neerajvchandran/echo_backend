@@ -2,25 +2,10 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Post = require('../models/Post');
+const requireAuth = require("../middleware/requireAuth");
 
-/* Helpers (session or Bearer token) */
-function extractToken(req) {
-  const auth = (req.headers.authorization || '').trim();
-  if (auth.startsWith('Bearer ')) return auth.replace('Bearer ', '').trim();
-  if (req.session && req.session.userId) return req.session.userId.toString();
-  return null;
-}
 
-async function requireAuth(req, res, next) {
-  const token = extractToken(req);
-  if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
-  const user = await User.findById(token);
-  if (!user) return res.status(401).json({ error: 'Invalid token / user not found' });
-
-  req.currentUser = user;
-  next();
-}
 
 /* GET /api/feed/ (feed from users you follow) */
 router.get('/', requireAuth, async (req, res) => {

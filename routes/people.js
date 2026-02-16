@@ -2,28 +2,29 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
 const Post = require("../models/Post");
+const requireAuth = require("../middleware/requireAuth");
 
-/* Helper token/session */
-function extractToken(req) {
-  const auth = (req.headers.authorization || "").trim();
-  if (auth.startsWith("Bearer ")) return auth.replace("Bearer ", "").trim();
-  if (req.session && req.session.userId) return req.session.userId.toString();
-  return null;
-}
-
-async function requireAuth(req, res, next) {
-  const token = extractToken(req);
-  if (!token) return res.status(401).json({ error: "Not authenticated" });
-  const user = await User.findById(token);
-  if (!user)
-    return res.status(401).json({ error: "Invalid token / user not found" });
-  req.currentUser = user;
-  next();
-}
 
 /* GET /api/people (paginated list) */
+const jwt = require("jsonwebtoken");
+
 router.get("/", async (req, res) => {
   try {
+    let currentUserId = null;
+
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      try {
+        const payload = jwt.verify(
+          authHeader.replace("Bearer ", ""),
+          process.env.JWT_SECRET
+        );
+        currentUserId = payload.id;
+      } catch {
+        // invalid token → ignore
+      }
+    }
+
     const perPage = parseInt(req.query.perPage) || 10;
     const page = Math.max(1, parseInt(req.query.page) || 1);
 
@@ -38,12 +39,10 @@ router.get("/", async (req, res) => {
     const users = usersRaw.map((u) => ({
       id: u._id.toString(),
       username: u.username,
-      email: u.email, // remove if you don't want to expose emails
+      email: u.email,
       followersCount: (u.followers || []).length,
       followingCount: (u.following || []).length,
     }));
-
-    const currentUserId = extractToken(req);
 
     res.json({
       ok: true,
@@ -51,20 +50,31 @@ router.get("/", async (req, res) => {
       currentPage: page,
       totalPages,
       perPage,
-      currentUser: currentUserId ? currentUserId.toString() : null,
+      currentUser: currentUserId,
     });
   } catch (err) {
     console.error("People list error:", err);
-    res
-      .status(500)
-      .json({ error: "Something went wrong while fetching users." });
+    res.status(500).json({ error: "Something went wrong while fetching users." });
   }
 });
+
 
 /* GET /api/people/:id (profile + posts) */
 router.get("/:id", async (req, res) => {
   try {
-    const currentUserId = extractToken(req);
+    let currentUserId = null;
+
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      try {
+        const payload = jwt.verify(
+          authHeader.replace("Bearer ", ""),
+          process.env.JWT_SECRET
+        );
+        currentUserId = payload.id;
+      } catch {}
+    }
+
     const user = await User.findById(req.params.id).lean();
     if (!user) return res.status(404).json({ error: "User not found" });
 
@@ -85,7 +95,7 @@ router.get("/:id", async (req, res) => {
     let isFollowing = false;
     if (currentUserId) {
       const followerIds = (user.followers || []).map((f) => f.toString());
-      isFollowing = followerIds.includes(currentUserId.toString());
+      isFollowing = followerIds.includes(currentUserId);
     }
 
     res.json({
@@ -98,15 +108,14 @@ router.get("/:id", async (req, res) => {
       },
       posts,
       isFollowing,
-      currentUser: currentUserId ? currentUserId.toString() : null,
+      currentUser: currentUserId,
     });
   } catch (err) {
     console.error("Profile error:", err);
-    res
-      .status(500)
-      .json({ error: "Something went wrong while loading profile." });
+    res.status(500).json({ error: "Something went wrong while loading profile." });
   }
 });
+
 
 /* POST /api/people/:id/follow (follow user) */
 router.post("/:id/follow", requireAuth, async (req, res) => {
